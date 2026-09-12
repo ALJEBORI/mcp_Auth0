@@ -1,0 +1,48 @@
+name: Release
+
+on:
+    push:
+        branches:
+            - main
+
+jobs:
+    release:
+        permissions:
+            id-token: write # Required for OIDC
+            contents: write
+            pull-requests: write
+
+        if: ${{ github.repository_owner == 'cloudflare' }}
+        timeout-minutes: 5
+        runs-on: ubuntu-22.04
+
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  fetch-depth: 1
+
+            - uses: pnpm/action-setup@v4
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  registry-url: "https://registry.npmjs.org"
+                  cache: "pnpm"
+
+            - name: Install dependencies
+              run: pnpm install --no-frozen-lockfile --child-concurrency=10
+
+            - name: Test and Build
+              run: |
+                  pnpm nx build workers-ai-provider
+                  pnpm nx build ai-gateway-provider
+                  pnpm nx build ai-search-provider
+                  pnpm nx build @cloudflare/tanstack-ai
+
+            - id: changesets
+              uses: changesets/action@v1
+              with:
+                  version: ./.github/version-and-install.sh
+                  publish: pnpm changeset publish
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  NPM_CONFIG_PROVENANCE: true

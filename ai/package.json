@@ -1,0 +1,38 @@
+{
+	"name": "@cloudflare/ai-mono",
+	"private": true,
+	"author": "Cloudflare Inc.",
+	"scripts": {
+		"format": "oxfmt --write .",
+		"lint": "oxlint",
+		"lint:fix": "oxlint --fix",
+		"postinstall": "nx run-many --target=build --projects='packages/*'"
+	},
+	"devDependencies": {
+		"@ai-sdk/openai": "^4.0.5",
+		"@changesets/changelog-github": "^0.7.0",
+		"@changesets/cli": "^2.31.0",
+		"@cloudflare/workers-oauth-provider": "^0.8.1",
+		"@modelcontextprotocol/sdk": "1.29.0",
+		"@types/node": "^26.0.1",
+		"@types/wait-on": "^5.3.4",
+		"agents": "^0.17.1",
+		"ai": "^7.0.11",
+		"dotenv": "^17.4.2",
+		"get-port": "^7.2.0",
+		"hono": "^4.12.27",
+		"msw": "^2.14.6",
+		"nx": "23.0.1",
+		"oxfmt": "^0.56.0",
+		"oxlint": "^1.71.0",
+		"tsdown": "^0.22.3",
+		"tsx": "^4.22.4",
+		"typescript": "6.0.3",
+		"vite": "^8.1.0",
+		"vitest": "~4.1.9",
+		"wait-on": "^9.0.10",
+		"wrangler": "^4.105.0",
+		"zod": "^4.4.3"
+	},
+	"packageManager": "pnpm@11.9.0"
+}

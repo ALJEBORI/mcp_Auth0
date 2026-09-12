@@ -1,0 +1,11 @@
+# Cloudflare credentials (required for Workers AI and AI Gateway routing)
+CLOUDFLARE_ACCOUNT_ID=
+CLOUDFLARE_AI_GATEWAY_ID=
+CLOUDFLARE_API_TOKEN=
+
+# Provider API keys can also be entered in the browser UI at runtime.
+# These env vars serve as fallbacks for local development.
+# OPENAI_API_KEY=
+# ANTHROPIC_API_KEY=
+# GEMINI_API_KEY=
+# GROK_API_KEY=

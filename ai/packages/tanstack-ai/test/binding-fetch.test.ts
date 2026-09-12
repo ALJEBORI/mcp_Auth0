@@ -1,0 +1,1053 @@
+import { describe, expect, it, vi, type Mock } from "vitest";
+import { createWorkersAiBindingFetch, type WorkersAiBinding } from "../src/utils/create-fetcher";
+
+type MockBinding = WorkersAiBinding & { run: Mock };
+
+/** Creates a mock WorkersAiBinding with the required `gateway` method. */
+function mockBinding(runImpl: ReturnType<typeof vi.fn>): MockBinding {
+	return { run: runImpl, gateway: vi.fn() } as unknown as MockBinding;
+}
+
+// ---------------------------------------------------------------------------
+// createWorkersAiBindingFetch (binding shim)
+// ---------------------------------------------------------------------------
+
+describe("createWorkersAiBindingFetch", () => {
+	it("should translate non-streaming request to OpenAI-compatible response", async () => {
+		const binding = mockBinding(
+			vi.fn().mockResolvedValue({ response: "Hello from Workers AI!" }),
+		);
+
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		const response = await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+				messages: [{ role: "user", content: "Hi" }],
+				temperature: 0.7,
+			}),
+		});
+
+		// Check binding was called correctly
+		expect(binding.run).toHaveBeenCalledOnce();
+		const [model, inputs] = binding.run.mock.calls[0]!;
+		expect(model).toBe("@cf/meta/llama-3.3-70b-instruct-fp8-fast");
+		expect(inputs.messages).toEqual([{ role: "user", content: "Hi" }]);
+		expect(inputs.temperature).toBe(0.7);
+		expect(inputs.stream).toBeUndefined();
+
+		// Check response is OpenAI-compatible
+		const json = (await response.json()) as {
+			choices: Array<{
+				message: { content: string; role: string };
+				finish_reason: string;
+			}>;
+		};
+		expect(json.choices[0]!.message.content).toBe("Hello from Workers AI!");
+		expect(json.choices[0]!.message.role).toBe("assistant");
+		expect(json.choices[0]!.finish_reason).toBe("stop");
+	});
+
+	it("should stringify object responses in non-streaming mode", async () => {
+		const binding = mockBinding(
+			vi.fn().mockResolvedValue({ response: { key: "value", nested: { a: 1 } } }),
+		);
+
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		const response = await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+				messages: [{ role: "user", content: "Hi" }],
+			}),
+		});
+
+		const json = (await response.json()) as {
+			choices: Array<{
+				message: { content: string; role: string };
+			}>;
+		};
+		expect(json.choices[0]!.message.content).toBe(
+			JSON.stringify({ key: "value", nested: { a: 1 } }),
+		);
+	});
+
+	it("should default to empty string for non-string non-object responses", async () => {
+		const binding = mockBinding(vi.fn().mockResolvedValue({ response: 42 }));
+
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		const response = await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+				messages: [{ role: "user", content: "Hi" }],
+			}),
+		});
+
+		const json = (await response.json()) as {
+			choices: Array<{
+				message: { content: string; role: string };
+			}>;
+		};
+		expect(json.choices[0]!.message.content).toBe("");
+	});
+
+	it("should handle null response field gracefully", async () => {
+		const binding = mockBinding(vi.fn().mockResolvedValue({ response: null }));
+
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		const response = await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+				messages: [{ role: "user", content: "Hi" }],
+			}),
+		});
+
+		const json = (await response.json()) as {
+			choices: Array<{
+				message: { content: string; role: string };
+			}>;
+		};
+		expect(json.choices[0]!.message.content).toBe("");
+	});
+
+	it("should pass max_tokens to binding when provided", async () => {
+		const binding = mockBinding(vi.fn().mockResolvedValue({ response: "ok" }));
+
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+				messages: [{ role: "user", content: "Hi" }],
+				max_tokens: 512,
+			}),
+		});
+
+		const [, inputs] = binding.run.mock.calls[0]!;
+		expect(inputs.max_tokens).toBe(512);
+	});
+
+	it("should handle tool calls in non-streaming response", async () => {
+		const binding = mockBinding(
+			vi.fn().mockResolvedValue({
+				response: "",
+				tool_calls: [
+					{
+						name: "get_weather",
+						arguments: { location: "San Francisco" },
+					},
+				],
+			}),
+		);
+
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		const response = await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+				messages: [{ role: "user", content: "What's the weather in SF?" }],
+				tools: [
+					{
+						type: "function",
+						function: { name: "get_weather", parameters: {} },
+					},
+				],
+			}),
+		});
+
+		const json = (await response.json()) as {
+			choices: Array<{
+				message: {
+					role: string;
+					content: string;
+					tool_calls?: Array<{
+						id: string;
+						type: string;
+						function: { name: string; arguments: string };
+					}>;
+				};
+				finish_reason: string;
+			}>;
+		};
+		expect(json.choices[0]!.finish_reason).toBe("tool_calls");
+		expect(json.choices[0]!.message.tool_calls).toHaveLength(1);
+		expect(json.choices[0]!.message.tool_calls![0]!.function.name).toBe("get_weather");
+		expect(JSON.parse(json.choices[0]!.message.tool_calls![0]!.function.arguments)).toEqual({
+			location: "San Francisco",
+		});
+	});
+
+	it("should translate streaming request and return SSE response", async () => {
+		const encoder = new TextEncoder();
+		const stream = new ReadableStream({
+			start(controller) {
+				controller.enqueue(encoder.encode('data: {"response":"Hello"}\n\n'));
+				controller.enqueue(encoder.encode('data: {"response":" world"}\n\n'));
+				controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+				controller.close();
+			},
+		});
+
+		const binding = mockBinding(vi.fn().mockResolvedValue(stream));
+
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		const response = await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+				messages: [{ role: "user", content: "Hi" }],
+				stream: true,
+			}),
+		});
+
+		expect(response.headers.get("Content-Type")).toBe("text/event-stream");
+
+		// Read the transformed stream
+		const reader = response.body!.getReader();
+		const decoder = new TextDecoder();
+		let text = "";
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			text += decoder.decode(value, { stream: true });
+		}
+
+		// Should contain OpenAI-formatted SSE events
+		expect(text).toContain('"object":"chat.completion.chunk"');
+		expect(text).toContain('"content":"Hello"');
+		expect(text).toContain('"content":" world"');
+		expect(text).toContain('"finish_reason":"stop"');
+
+		// Should contain exactly one [DONE] (not duplicated)
+		const doneCount = (text.match(/data: \[DONE\]/g) || []).length;
+		expect(doneCount).toBe(1);
+	});
+
+	it("should use stable stream ID across all chunks", async () => {
+		const encoder = new TextEncoder();
+		const stream = new ReadableStream({
+			start(controller) {
+				controller.enqueue(encoder.encode('data: {"response":"Hello"}\n\n'));
+				controller.enqueue(encoder.encode('data: {"response":" world"}\n\n'));
+				controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+				controller.close();
+			},
+		});
+
+		const binding = mockBinding(vi.fn().mockResolvedValue(stream));
+
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		const response = await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+				messages: [{ role: "user", content: "Hi" }],
+				stream: true,
+			}),
+		});
+
+		const reader = response.body!.getReader();
+		const decoder = new TextDecoder();
+		let text = "";
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			text += decoder.decode(value, { stream: true });
+		}
+
+		// Extract all IDs from the SSE events
+		const ids = [...text.matchAll(/"id":"(workers-ai-[^"]+)"/g)].map((m) => m[1]);
+		expect(ids.length).toBeGreaterThanOrEqual(3); // 2 content chunks + 1 finish chunk
+		// All IDs should be identical
+		const uniqueIds = new Set(ids);
+		expect(uniqueIds.size).toBe(1);
+	});
+
+	it("should handle tool calls in streaming response", async () => {
+		const encoder = new TextEncoder();
+		const stream = new ReadableStream({
+			start(controller) {
+				controller.enqueue(
+					encoder.encode(
+						'data: {"response":"","tool_calls":[{"name":"add","arguments":{"a":1,"b":2}}]}\n\n',
+					),
+				);
+				controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+				controller.close();
+			},
+		});
+
+		const binding = mockBinding(vi.fn().mockResolvedValue(stream));
+
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		const response = await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+				messages: [],
+				stream: true,
+				tools: [
+					{
+						type: "function",
+						function: { name: "add", parameters: {} },
+					},
+				],
+			}),
+		});
+
+		const reader = response.body!.getReader();
+		const decoder = new TextDecoder();
+		let text = "";
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			text += decoder.decode(value, { stream: true });
+		}
+
+		// Should contain tool call delta
+		expect(text).toContain('"tool_calls"');
+		expect(text).toContain('"name":"add"');
+		// Finish reason should be tool_calls
+		expect(text).toContain('"finish_reason":"tool_calls"');
+	});
+
+	it("should pass tools to binding when provided", async () => {
+		const binding = mockBinding(vi.fn().mockResolvedValue({ response: "ok" }));
+
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+				messages: [],
+				tools: [
+					{
+						type: "function",
+						function: { name: "add", parameters: {} },
+					},
+				],
+			}),
+		});
+
+		const [, inputs] = binding.run.mock.calls[0]!;
+		expect(inputs.tools).toEqual([
+			{ type: "function", function: { name: "add", parameters: {} } },
+		]);
+	});
+
+	it("should normalize null content to empty string in messages", async () => {
+		const binding = mockBinding(vi.fn().mockResolvedValue({ response: "ok" }));
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+				messages: [
+					{ role: "user", content: "hi" },
+					{
+						role: "assistant",
+						content: null,
+						tool_calls: [
+							{
+								id: "call_abc",
+								type: "function",
+								function: { name: "fn", arguments: "{}" },
+							},
+						],
+					},
+					{ role: "tool", tool_call_id: "call_abc", content: '{"ok":true}' },
+				],
+			}),
+		});
+
+		const [, inputs] = binding.run.mock.calls[0]!;
+		const messages = inputs.messages as Array<Record<string, unknown>>;
+		// content: null should become content: ""
+		expect(messages[1]!.content).toBe("");
+		// tool_call_id should be passed through as-is
+		expect(messages[2]!.tool_call_id).toBe("call_abc");
+		// assistant's tool_calls[].id should also be passed through as-is
+		expect((messages[1]!.tool_calls as Array<Record<string, unknown>>)[0]!.id).toBe("call_abc");
+	});
+
+	it("should pass through tool_call_id with dashes unchanged", async () => {
+		const binding = mockBinding(vi.fn().mockResolvedValue({ response: "ok" }));
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+				messages: [
+					{ role: "user", content: "hi" },
+					{
+						role: "assistant",
+						content: "",
+						tool_calls: [
+							{
+								id: "chatcmpl-tool-875d3ec6179676ae",
+								type: "function",
+								function: { name: "fn", arguments: "{}" },
+							},
+						],
+					},
+					{
+						role: "tool",
+						tool_call_id: "chatcmpl-tool-875d3ec6179676ae",
+						content: "result",
+					},
+				],
+			}),
+		});
+
+		const [, inputs] = binding.run.mock.calls[0]!;
+		const messages = inputs.messages as Array<Record<string, unknown>>;
+		expect(messages[1]!.tool_calls).toBeDefined();
+		const assistantToolId = (messages[1]!.tool_calls as Array<Record<string, unknown>>)[0]!.id;
+		const toolMsgId = messages[2]!.tool_call_id;
+		// IDs should be passed through unchanged
+		expect(assistantToolId).toBe("chatcmpl-tool-875d3ec6179676ae");
+		expect(toolMsgId).toBe("chatcmpl-tool-875d3ec6179676ae");
+	});
+
+	it("should handle streaming tool calls in nested format (real binding format)", async () => {
+		// This mimics the actual Workers AI binding stream format for tool calls:
+		// Chunk 1: { tool_calls: [{ id, type, index, function: { name } }] }
+		// Chunk 2: { tool_calls: [{ index, function: { arguments: "partial" } }] }
+		// Chunk 3: { tool_calls: [{ index, function: { arguments: "rest" } }] }
+		// Chunk 4: { tool_calls: [{ id: null, type: null, index, function: { name: null, arguments: "" } }] }  (finalize, skip)
+		const encoder = new TextEncoder();
+		const stream = new ReadableStream({
+			start(controller) {
+				controller.enqueue(encoder.encode('data: {"response":"","tool_calls":[]}\n\n'));
+				controller.enqueue(
+					encoder.encode(
+						'data: {"tool_calls":[{"id":"chatcmpl-tool-abc123","type":"function","index":0,"function":{"name":"calculator"}}]}\n\n',
+					),
+				);
+				controller.enqueue(
+					encoder.encode(
+						'data: {"tool_calls":[{"index":0,"function":{"arguments":"{\\"a\\": 1"}}]}\n\n',
+					),
+				);
+				controller.enqueue(
+					encoder.encode(
+						'data: {"tool_calls":[{"index":0,"function":{"arguments":", \\"b\\": 2}"}}]}\n\n',
+					),
+				);
+				controller.enqueue(
+					encoder.encode(
+						'data: {"tool_calls":[{"id":null,"type":null,"index":0,"function":{"name":null,"arguments":""}}]}\n\n',
+					),
+				);
+				controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+				controller.close();
+			},
+		});
+
+		const binding = mockBinding(vi.fn().mockResolvedValue(stream));
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		const response = await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+				messages: [{ role: "user", content: "1+2?" }],
+				stream: true,
+				tools: [
+					{
+						type: "function",
+						function: { name: "calculator", parameters: {} },
+					},
+				],
+			}),
+		});
+
+		const reader = response.body!.getReader();
+		const decoder = new TextDecoder();
+		let text = "";
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			text += decoder.decode(value, { stream: true });
+		}
+
+		// Should contain tool call with correct name
+		expect(text).toContain('"name":"calculator"');
+		// Should contain streamed arguments
+		expect(text).toContain('"arguments":"{\\"a\\": 1"');
+		expect(text).toContain('"arguments":", \\"b\\": 2}"');
+		// Finish reason should be tool_calls
+		expect(text).toContain('"finish_reason":"tool_calls"');
+		// Parse all SSE events and verify tool call chunks are well-formed
+		const events = text.split("data: ").filter((e) => e.trim() && e.trim() !== "[DONE]");
+		const toolCallEvents = events
+			.map((e) => {
+				try {
+					return JSON.parse(e.replace(/\n+$/, ""));
+				} catch {
+					return null;
+				}
+			})
+			.filter((e) => e?.choices?.[0]?.delta?.tool_calls);
+		// Should have at least 3 chunks: start (id+name), args part 1, args part 2
+		expect(toolCallEvents.length).toBeGreaterThanOrEqual(3);
+		// First tool call chunk should have id, type, and name
+		const firstTc = toolCallEvents[0].choices[0].delta.tool_calls[0];
+		expect(firstTc.id).toBe("chatcmpl-tool-abc123");
+		expect(firstTc.type).toBe("function");
+		expect(firstTc.function.name).toBe("calculator");
+	});
+
+	it("should pass through OpenAI-format streams (Qwen3/Kimi-style binding output)", async () => {
+		// Some models (Qwen3, Kimi K2.5) stream in OpenAI-compatible format through
+		// the binding, with `choices[].delta.content` instead of `response`.
+		// The transformer should detect this and pass through as-is.
+		const encoder = new TextEncoder();
+		const stream = new ReadableStream({
+			start(controller) {
+				controller.enqueue(
+					encoder.encode(
+						'data: {"id":"chatcmpl-abc","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"reasoning_content":"thinking..."},"finish_reason":null}]}\n\n',
+					),
+				);
+				controller.enqueue(
+					encoder.encode(
+						'data: {"id":"chatcmpl-abc","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}\n\n',
+					),
+				);
+				controller.enqueue(
+					encoder.encode(
+						'data: {"id":"chatcmpl-abc","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":" world"},"finish_reason":null}]}\n\n',
+					),
+				);
+				controller.enqueue(
+					encoder.encode(
+						'data: {"id":"chatcmpl-abc","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+					),
+				);
+				controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+				controller.close();
+			},
+		});
+
+		const binding = mockBinding(vi.fn().mockResolvedValue(stream));
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		const response = await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/qwen/qwen3-30b-a3b-fp8",
+				messages: [{ role: "user", content: "Hi" }],
+				stream: true,
+			}),
+		});
+
+		const reader = response.body!.getReader();
+		const decoder = new TextDecoder();
+		let text = "";
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			text += decoder.decode(value, { stream: true });
+		}
+
+		// Should preserve the original OpenAI-format content
+		expect(text).toContain('"content":"Hello"');
+		expect(text).toContain('"content":" world"');
+		expect(text).toContain('"reasoning_content":"thinking..."');
+		// Should include the original finish reason from the stream
+		expect(text).toContain('"finish_reason":"stop"');
+		// Should NOT contain a workers-ai-* id (passthrough keeps original id)
+		expect(text).toContain('"id":"chatcmpl-abc"');
+		expect(text).not.toContain("workers-ai-");
+		// Should have exactly one [DONE]
+		const doneCount = (text.match(/data: \[DONE\]/g) || []).length;
+		expect(doneCount).toBe(1);
+	});
+
+	// -------------------------------------------------------------------------
+	// Error handling — binding throws should surface as HTTP responses so the
+	// OpenAI SDK's status-based retry/error handling engages.
+	// -------------------------------------------------------------------------
+
+	it("should surface a 3040 (out of capacity) binding error as a 429 response", async () => {
+		const binding = mockBinding(
+			vi.fn().mockRejectedValue(new Error("3040: Capacity temporarily exceeded")),
+		);
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		const response = await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+				messages: [{ role: "user", content: "Hi" }],
+			}),
+		});
+
+		expect(response.status).toBe(429);
+		expect(await response.text()).toContain("3040");
+	});
+
+	it("should surface a 5007 (no such model) binding error as a 400 response", async () => {
+		const binding = mockBinding(vi.fn().mockRejectedValue(new Error("5007: No such model")));
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		const response = await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+				messages: [{ role: "user", content: "Hi" }],
+			}),
+		});
+
+		expect(response.status).toBe(400);
+	});
+
+	it("should re-throw an abort (DOMException) instead of returning a response", async () => {
+		const abort = new DOMException("The operation was aborted", "AbortError");
+		const binding = mockBinding(vi.fn().mockRejectedValue(abort));
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		await expect(
+			fetcher("https://api.openai.com/v1/chat/completions", {
+				method: "POST",
+				body: JSON.stringify({
+					model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+					messages: [{ role: "user", content: "Hi" }],
+				}),
+			}),
+		).rejects.toBe(abort);
+	});
+
+	it("should re-throw an unrecognized binding error (no fabricated status)", async () => {
+		const boom = new Error("unexpected kaboom");
+		const binding = mockBinding(vi.fn().mockRejectedValue(boom));
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		await expect(
+			fetcher("https://api.openai.com/v1/chat/completions", {
+				method: "POST",
+				body: JSON.stringify({
+					model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+					messages: [{ role: "user", content: "Hi" }],
+				}),
+			}),
+		).rejects.toBe(boom);
+	});
+
+	it("should return a non-OK gateway run-path response as-is (not swallow it)", async () => {
+		// Run path (gateway set) uses returnRawResponse. A non-OK response must be
+		// returned verbatim so the OpenAI SDK sees the status + Retry-After and
+		// retries, instead of being parsed into an empty "successful" completion.
+		const binding = mockBinding(
+			vi.fn().mockResolvedValue(
+				new Response("rate limited", {
+					status: 429,
+					headers: { "retry-after": "2" },
+				}),
+			),
+		);
+		const fetcher = createWorkersAiBindingFetch(binding, { gateway: "my-gateway" });
+
+		const response = await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+				messages: [{ role: "user", content: "Hi" }],
+			}),
+		});
+
+		expect(response.status).toBe(429);
+		expect(response.headers.get("retry-after")).toBe("2");
+		expect(await response.text()).toBe("rate limited");
+	});
+
+	it("should surface a thrown gateway run-path binding error as a mapped response", async () => {
+		const binding = mockBinding(vi.fn().mockRejectedValue(new Error("3040: out of capacity")));
+		const fetcher = createWorkersAiBindingFetch(binding, { gateway: "my-gateway" });
+
+		const response = await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+				messages: [{ role: "user", content: "Hi" }],
+			}),
+		});
+
+		expect(response.status).toBe(429);
+	});
+
+	it("should return 400 when no body is provided", async () => {
+		const binding = mockBinding(vi.fn());
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		const response = await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+		});
+
+		expect(response.status).toBe(400);
+		expect(binding.run).not.toHaveBeenCalled();
+	});
+
+	it("should handle non-streaming fallback (model ignores stream: true)", async () => {
+		// Some models return a complete response even when stream: true is requested.
+		// The binding shim should gracefully wrap it as an OpenAI Chat Completion.
+		const binding = mockBinding(
+			vi.fn().mockResolvedValue({ response: "I don't stream, sorry!" }),
+		);
+
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		const response = await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+				messages: [{ role: "user", content: "Hi" }],
+				stream: true,
+			}),
+		});
+
+		// Should get a valid JSON response (not SSE), since the model didn't stream
+		expect(response.headers.get("Content-Type")).toBe("application/json");
+
+		const json = (await response.json()) as {
+			choices: Array<{
+				message: { content: string; role: string };
+				finish_reason: string;
+			}>;
+		};
+		expect(json.choices[0]!.message.content).toBe("I don't stream, sorry!");
+		expect(json.choices[0]!.finish_reason).toBe("stop");
+	});
+
+	it("should forward extraHeaders to binding.run() when configured", async () => {
+		const binding = mockBinding(vi.fn().mockResolvedValue({ response: "ok" }));
+
+		const fetcher = createWorkersAiBindingFetch(binding, {
+			extraHeaders: { "x-session-affinity": "session-123" },
+		});
+
+		await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+				messages: [{ role: "user", content: "Hi" }],
+			}),
+		});
+
+		expect(binding.run).toHaveBeenCalledOnce();
+		const [, , options] = binding.run.mock.calls[0]!;
+		expect(options).toEqual({
+			extraHeaders: { "x-session-affinity": "session-123" },
+		});
+	});
+
+	it("should not pass extraHeaders to binding.run() when not configured", async () => {
+		const binding = mockBinding(vi.fn().mockResolvedValue({ response: "ok" }));
+
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+				messages: [{ role: "user", content: "Hi" }],
+			}),
+		});
+
+		expect(binding.run).toHaveBeenCalledOnce();
+		const [, , options] = binding.run.mock.calls[0]! as [
+			unknown,
+			unknown,
+			Record<string, unknown> | undefined,
+		];
+		if (options) {
+			expect(options).not.toHaveProperty("extraHeaders");
+		}
+	});
+
+	it("should pass response_format to binding for structured output", async () => {
+		const binding = mockBinding(vi.fn().mockResolvedValue({ response: '{"name":"test"}' }));
+
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+				messages: [],
+				response_format: {
+					type: "json_schema",
+					json_schema: { name: "test", schema: {} },
+				},
+			}),
+		});
+
+		const [, inputs] = binding.run.mock.calls[0]!;
+		expect(inputs.response_format).toEqual({
+			type: "json_schema",
+			json_schema: { name: "test", schema: {} },
+		});
+	});
+
+	// ---------------------------------------------------------------------------
+	// Reasoning passthrough — reasoning_effort + chat_template_kwargs
+	// https://github.com/cloudflare/ai/issues/503
+	// ---------------------------------------------------------------------------
+
+	it("should forward reasoning_effort to binding.run inputs (not options)", async () => {
+		const binding = mockBinding(vi.fn().mockResolvedValue({ response: "ok" }));
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/zai-org/glm-4.7-flash",
+				messages: [{ role: "user", content: "Hi" }],
+				reasoning_effort: "low",
+			}),
+		});
+
+		const [, inputs, options] = binding.run.mock.calls[0]! as [
+			unknown,
+			Record<string, unknown>,
+			Record<string, unknown> | undefined,
+		];
+		// Must land on inputs (2nd arg), not options (3rd arg)
+		expect(inputs.reasoning_effort).toBe("low");
+		if (options) {
+			expect(options).not.toHaveProperty("reasoning_effort");
+		}
+	});
+
+	it("should forward chat_template_kwargs to binding.run inputs", async () => {
+		const binding = mockBinding(vi.fn().mockResolvedValue({ response: "ok" }));
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/zai-org/glm-4.7-flash",
+				messages: [{ role: "user", content: "Hi" }],
+				chat_template_kwargs: { enable_thinking: false },
+			}),
+		});
+
+		const [, inputs] = binding.run.mock.calls[0]! as [unknown, Record<string, unknown>];
+		expect(inputs.chat_template_kwargs).toEqual({ enable_thinking: false });
+	});
+
+	it("should preserve reasoning_effort: null (disables reasoning)", async () => {
+		const binding = mockBinding(vi.fn().mockResolvedValue({ response: "ok" }));
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/zai-org/glm-4.7-flash",
+				messages: [{ role: "user", content: "Hi" }],
+				reasoning_effort: null,
+			}),
+		});
+
+		const [, inputs] = binding.run.mock.calls[0]! as [unknown, Record<string, unknown>];
+		// null must be preserved — it's the explicit "no reasoning" signal
+		expect(inputs).toHaveProperty("reasoning_effort");
+		expect(inputs.reasoning_effort).toBeNull();
+	});
+
+	it("should not set reasoning_effort when omitted", async () => {
+		const binding = mockBinding(vi.fn().mockResolvedValue({ response: "ok" }));
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+				messages: [{ role: "user", content: "Hi" }],
+			}),
+		});
+
+		const [, inputs] = binding.run.mock.calls[0]! as [unknown, Record<string, unknown>];
+		expect(inputs).not.toHaveProperty("reasoning_effort");
+		expect(inputs).not.toHaveProperty("chat_template_kwargs");
+	});
+
+	it("should forward an empty chat_template_kwargs object", async () => {
+		const binding = mockBinding(vi.fn().mockResolvedValue({ response: "ok" }));
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/zai-org/glm-4.7-flash",
+				messages: [{ role: "user", content: "Hi" }],
+				chat_template_kwargs: {},
+			}),
+		});
+
+		const [, inputs] = binding.run.mock.calls[0]! as [unknown, Record<string, unknown>];
+		expect(inputs.chat_template_kwargs).toEqual({});
+	});
+
+	it("should NOT forward unknown body fields to binding inputs (allowlist policy)", async () => {
+		// The binding shim uses an explicit allowlist. Fields that the Workers
+		// AI binding doesn't understand (e.g. `stream_options` from the OpenAI
+		// SDK, or an arbitrary `seed`) must be dropped so the binding's schema
+		// validation doesn't reject the whole request. REST and gateway paths
+		// forward everything; binding drops unknowns. This asymmetry is
+		// documented in `WorkersAiTextModelOptions`.
+		const binding = mockBinding(vi.fn().mockResolvedValue({ response: "ok" }));
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/zai-org/glm-4.7-flash",
+				messages: [{ role: "user", content: "Hi" }],
+				seed: 42,
+				stream_options: { include_usage: true },
+				some_unknown_future_field: "hello",
+			}),
+		});
+
+		const [, inputs] = binding.run.mock.calls[0]! as [unknown, Record<string, unknown>];
+		expect(inputs).not.toHaveProperty("seed");
+		expect(inputs).not.toHaveProperty("stream_options");
+		expect(inputs).not.toHaveProperty("some_unknown_future_field");
+		// Canonical fields and reasoning fields still flow
+		expect(inputs.messages).toBeDefined();
+	});
+
+	it("should forward reasoning params alongside streaming requests", async () => {
+		const encoder = new TextEncoder();
+		const stream = new ReadableStream({
+			start(controller) {
+				controller.enqueue(encoder.encode('data: {"response":"ok"}\n\n'));
+				controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+				controller.close();
+			},
+		});
+		const binding = mockBinding(vi.fn().mockResolvedValue(stream));
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/zai-org/glm-4.7-flash",
+				messages: [{ role: "user", content: "Hi" }],
+				stream: true,
+				reasoning_effort: "medium",
+				chat_template_kwargs: { enable_thinking: true },
+			}),
+		});
+
+		const [, inputs] = binding.run.mock.calls[0]! as [unknown, Record<string, unknown>];
+		expect(inputs.stream).toBe(true);
+		expect(inputs.reasoning_effort).toBe("medium");
+		expect(inputs.chat_template_kwargs).toEqual({ enable_thinking: true });
+	});
+
+	it("should pass content arrays through to binding for vision models", async () => {
+		const binding = mockBinding(vi.fn().mockResolvedValue({ response: "A red square" }));
+
+		const fetcher = createWorkersAiBindingFetch(binding);
+
+		const base64 = btoa("fake-png-bytes");
+
+		await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({
+				model: "@cf/meta/llama-4-scout-17b-16e-instruct",
+				messages: [
+					{
+						role: "user",
+						content: [
+							{ type: "text", text: "Describe this" },
+							{
+								type: "image_url",
+								image_url: { url: `data:image/png;base64,${base64}` },
+							},
+						],
+					},
+				],
+			}),
+		});
+
+		const [, inputs] = binding.run.mock.calls[0]!;
+		expect(inputs.messages[0].content).toEqual([
+			{ type: "text", text: "Describe this" },
+			{
+				type: "image_url",
+				image_url: { url: `data:image/png;base64,${base64}` },
+			},
+		]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Third-party catalog slug gateway defaulting
+//
+// A `"<vendor>/<model>"` unified-billing model must route through an AI Gateway,
+// so even with no gateway configured the binding shim defaults it to the account
+// `"default"` gateway (parity with workers-ai-provider). `@cf/*` and `dynamic/*`
+// keep the plain binding path (no gateway) when none is configured.
+// ---------------------------------------------------------------------------
+
+describe("createWorkersAiBindingFetch — catalog slug gateway defaulting", () => {
+	/** A raw run-path Response (binding.run returns raw when returnRawResponse is set). */
+	function rawJson(): Response {
+		return new Response(JSON.stringify({ response: "hi" }), {
+			headers: { "content-type": "application/json" },
+		});
+	}
+
+	async function callWith(binding: MockBinding, model: string, gateway?: string) {
+		const fetcher = createWorkersAiBindingFetch(binding, gateway ? { gateway } : undefined);
+		await fetcher("https://api.openai.com/v1/chat/completions", {
+			method: "POST",
+			body: JSON.stringify({ model, messages: [{ role: "user", content: "Hi" }] }),
+		});
+		return binding.run.mock.calls[0]! as [string, Record<string, unknown>, unknown];
+	}
+
+	it("defaults a third-party catalog slug to the account gateway (run path)", async () => {
+		const binding = mockBinding(vi.fn().mockResolvedValue(rawJson()));
+		const [model, , opts] = await callWith(binding, "deepseek/deepseek-v4-pro");
+		expect(model).toBe("deepseek/deepseek-v4-pro");
+		expect(opts).toMatchObject({ gateway: { id: "default" }, returnRawResponse: true });
+	});
+
+	it("keeps `@cf/*` models on the plain binding path (no gateway) when none is configured", async () => {
+		const binding = mockBinding(vi.fn().mockResolvedValue({ response: "hi" }));
+		const [, , opts] = await callWith(binding, "@cf/meta/llama-3.3-70b-instruct-fp8-fast");
+		// Plain binding path passes `undefined` (or no gateway) as the options arg.
+		expect((opts as { gateway?: unknown } | undefined)?.gateway).toBeUndefined();
+	});
+
+	it("does NOT auto-default for `dynamic/*` routes", async () => {
+		const binding = mockBinding(vi.fn().mockResolvedValue({ response: "hi" }));
+		const [, , opts] = await callWith(binding, "dynamic/my-route");
+		expect((opts as { gateway?: unknown } | undefined)?.gateway).toBeUndefined();
+	});
+
+	it("respects an explicitly configured gateway over the catalog default", async () => {
+		const binding = mockBinding(vi.fn().mockResolvedValue(rawJson()));
+		const [, , opts] = await callWith(binding, "deepseek/deepseek-v4-pro", "my-gw");
+		expect(opts).toMatchObject({ gateway: { id: "my-gw" } });
+	});
+});

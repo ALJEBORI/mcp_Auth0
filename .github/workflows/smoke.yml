@@ -1,0 +1,42 @@
+name: Smoke Tests
+
+on:
+    schedule:
+        # Run the workflow every day at midnight UTC
+        - cron: "0 0 * * *"
+    workflow_dispatch: # Allow manual triggering of the workflow
+
+jobs:
+    main:
+        runs-on: ubuntu-latest
+        env:
+            CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+            CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        steps:
+            # Checkout the repository
+            - name: Checkout code
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - uses: pnpm/action-setup@v4
+
+            # Set up Node.js with caching for pnpm dependencies
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: "pnpm"
+
+            # Install dependencies
+            - name: Install dependencies
+              run: pnpm install --frozen-lockfile --child-concurrency=10
+
+            # Set commit shas for Nx if needed
+            - name: Set Nx SHAs
+              uses: nrwl/nx-set-shas@v4
+
+            # Run Nx tasks including the staging deployment and extract the URL.
+            - name: Run smoke tests
+              id: checks
+              run: pnpm nx run-many -t test:smoke

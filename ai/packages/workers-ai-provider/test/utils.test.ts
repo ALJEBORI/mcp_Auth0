@@ -1,0 +1,935 @@
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import {
+	buildJsonSchemaPayload,
+	createAISDKToolCallId,
+	processPartialToolCalls,
+	processToolCalls,
+	processText,
+	normalizeMessagesForBinding,
+	prepareToolsAndToolChoice,
+	salvageToolCallsFromText,
+	createRun,
+	toWorkersAIToolCallId,
+} from "../src/utils";
+
+// ---------------------------------------------------------------------------
+// buildJsonSchemaPayload
+// ---------------------------------------------------------------------------
+
+describe("buildJsonSchemaPayload", () => {
+	const schema = {
+		type: "object",
+		properties: { ok: { type: "boolean" } },
+		required: ["ok"],
+	} as const;
+
+	it("returns the bare schema unchanged when no name/description given", () => {
+		const result = buildJsonSchemaPayload(schema);
+		// Same reference: nothing to add, no clone needed.
+		expect(result).toBe(schema);
+	});
+
+	it("does NOT wrap the schema in an OpenAI { name, schema } envelope", () => {
+		const result = buildJsonSchemaPayload(schema, "Result", "A result") as Record<
+			string,
+			unknown
+		>;
+		// The bare schema keywords stay at the top level...
+		expect(result.type).toBe("object");
+		expect(result.properties).toEqual(schema.properties);
+		// ...and the envelope keys are absent.
+		expect(result).not.toHaveProperty("schema");
+		expect(result).not.toHaveProperty("strict");
+	});
+
+	it("folds name into JSON Schema `title`", () => {
+		const result = buildJsonSchemaPayload(schema, "Result") as Record<string, unknown>;
+		expect(result.title).toBe("Result");
+		expect(result).not.toHaveProperty("description");
+	});
+
+	it("folds description into JSON Schema `description`", () => {
+		const result = buildJsonSchemaPayload(schema, undefined, "A boolean result") as Record<
+			string,
+			unknown
+		>;
+		expect(result.description).toBe("A boolean result");
+		expect(result).not.toHaveProperty("title");
+	});
+
+	it("folds both name and description when both are provided", () => {
+		const result = buildJsonSchemaPayload(schema, "Result", "A boolean result") as Record<
+			string,
+			unknown
+		>;
+		expect(result.title).toBe("Result");
+		expect(result.description).toBe("A boolean result");
+	});
+
+	it("never overwrites an existing schema-level title", () => {
+		const withTitle = { ...schema, title: "Existing" };
+		const result = buildJsonSchemaPayload(withTitle, "Result") as Record<string, unknown>;
+		expect(result.title).toBe("Existing");
+	});
+
+	it("never overwrites an existing schema-level description", () => {
+		const withDescription = { ...schema, description: "Existing description" };
+		const result = buildJsonSchemaPayload(
+			withDescription,
+			undefined,
+			"New description",
+		) as Record<string, unknown>;
+		expect(result.description).toBe("Existing description");
+	});
+
+	it("ignores empty-string name/description", () => {
+		const result = buildJsonSchemaPayload(schema, "", "");
+		expect(result).toBe(schema);
+	});
+
+	it("does not mutate the input schema", () => {
+		const input = { type: "object", properties: { ok: { type: "boolean" } } };
+		const snapshot = structuredClone(input);
+		buildJsonSchemaPayload(input, "Result", "A result");
+		expect(input).toEqual(snapshot);
+	});
+
+	it("passes through undefined (no schema, plain JSON mode)", () => {
+		expect(buildJsonSchemaPayload(undefined, "Result", "A result")).toBeUndefined();
+	});
+
+	it("passes through non-object schemas untouched", () => {
+		expect(buildJsonSchemaPayload(true as unknown, "Result")).toBe(true);
+		expect(buildJsonSchemaPayload(null, "Result")).toBeNull();
+		const arr = [1, 2, 3];
+		expect(buildJsonSchemaPayload(arr, "Result")).toBe(arr);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// normalizeMessagesForBinding
+// ---------------------------------------------------------------------------
+
+describe("normalizeMessagesForBinding", () => {
+	it("should pass through normal messages unchanged", () => {
+		const messages = [
+			{ role: "system" as const, content: "You are helpful" },
+			{ role: "user" as const, content: "Hello" },
+		];
+		const result = normalizeMessagesForBinding(messages);
+		expect(result).toEqual(messages);
+	});
+
+	it("should convert null content to empty string", () => {
+		const messages = [
+			{
+				role: "assistant" as const,
+				content: null as unknown as string,
+			},
+		];
+		const result = normalizeMessagesForBinding(messages);
+		expect(result[0]).toHaveProperty("content", "");
+	});
+
+	it("should pass through tool_call_id unchanged", () => {
+		const messages = [
+			{
+				role: "tool" as const,
+				name: "get_weather",
+				content: '{"temp": 72}',
+				tool_call_id: "chatcmpl-tool-875d3ec6179676ae",
+			},
+		];
+		const result = normalizeMessagesForBinding(messages);
+		expect(result[0]).toHaveProperty("tool_call_id", "chatcmpl-tool-875d3ec6179676ae");
+	});
+
+	it("should pass through tool_calls[].id unchanged", () => {
+		const messages = [
+			{
+				role: "assistant" as const,
+				content: "",
+				tool_calls: [
+					{
+						id: "chatcmpl-tool-abc123def456",
+						type: "function" as const,
+						function: { name: "calc", arguments: "{}" },
+					},
+				],
+			},
+		];
+		const result = normalizeMessagesForBinding(messages);
+		const assistant = result[0] as {
+			tool_calls?: Array<{ id: string }>;
+		};
+		expect(assistant.tool_calls?.[0].id).toBe("chatcmpl-tool-abc123def456");
+	});
+
+	it("should not mutate the original messages array", () => {
+		const original = [
+			{
+				role: "assistant" as const,
+				content: null as unknown as string,
+			},
+		];
+		normalizeMessagesForBinding(original);
+		expect(original[0].content).toBeNull();
+	});
+
+	it("should pass through content arrays unchanged (binding supports them at runtime)", () => {
+		const contentArray = [
+			{ type: "text" as const, text: "Describe this" },
+			{ type: "image_url" as const, image_url: { url: "data:image/png;base64,abc" } },
+		];
+		const messages = [
+			{
+				role: "user" as const,
+				content: contentArray,
+			},
+		];
+		const result = normalizeMessagesForBinding(messages);
+		expect(result[0].content).toEqual(contentArray);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// processPartialToolCalls
+// ---------------------------------------------------------------------------
+
+describe("processPartialToolCalls", () => {
+	it("should merge partial tool calls by index", () => {
+		const partialCalls = [
+			{
+				function: { arguments: '{"par', name: "test_func" },
+				id: "call_123",
+				index: 0,
+				type: "function",
+			},
+			{
+				function: { arguments: 'am": "val' },
+				index: 0,
+			},
+			{
+				function: { arguments: 'ue"}' },
+				index: 0,
+			},
+		];
+		const result = processPartialToolCalls(partialCalls);
+		expect(result).toHaveLength(1);
+		expect(result[0].input).toBe('{"param": "value"}');
+		expect(result[0].toolName).toBe("test_func");
+		expect(result[0].toolCallId).not.toBe("call_123");
+		expect(toWorkersAIToolCallId(result[0].toolCallId)).toBe("call_123");
+	});
+
+	it("should handle multiple partial tool calls with different indices", () => {
+		const partialCalls = [
+			{
+				function: { arguments: '{"a":', name: "func1" },
+				id: "call_1",
+				index: 0,
+			},
+			{
+				function: { arguments: '{"b":', name: "func2" },
+				id: "call_2",
+				index: 1,
+			},
+			{
+				function: { arguments: '"value1"}' },
+				index: 0,
+			},
+			{
+				function: { arguments: '"value2"}' },
+				index: 1,
+			},
+		];
+
+		const result = processPartialToolCalls(partialCalls);
+		expect(result).toHaveLength(2);
+
+		const call1 = result.find((call) => toWorkersAIToolCallId(call.toolCallId) === "call_1");
+		const call2 = result.find((call) => toWorkersAIToolCallId(call.toolCallId) === "call_2");
+
+		expect(call1?.input).toBe('{"a":"value1"}');
+		expect(call2?.input).toBe('{"b":"value2"}');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// processToolCalls
+// ---------------------------------------------------------------------------
+
+describe("processToolCalls", () => {
+	it("should process OpenAI format tool calls", () => {
+		const output = {
+			tool_calls: [
+				{
+					function: {
+						arguments: '{"param": "value"}',
+						name: "test_function",
+					},
+					id: "call_123",
+					type: "function",
+				},
+			],
+		};
+
+		const result = processToolCalls(output);
+		expect(result).toHaveLength(1);
+		expect(result[0]).toMatchObject({
+			input: '{"param": "value"}',
+			toolName: "test_function",
+			type: "tool-call",
+		});
+		expect(result[0].toolCallId).not.toBe("call_123");
+		expect(toWorkersAIToolCallId(result[0].toolCallId)).toBe("call_123");
+	});
+
+	it("should handle tool calls with object arguments", () => {
+		const output = {
+			tool_calls: [
+				{
+					function: {
+						arguments: { param: "value" },
+						name: "test_function",
+					},
+					id: "call_123",
+					type: "function",
+				},
+			],
+		};
+
+		const result = processToolCalls(output);
+		expect(result[0].input).toBe('{"param":"value"}');
+	});
+
+	it("should handle tool calls without function wrapper", () => {
+		const output = {
+			tool_calls: [
+				{
+					arguments: '{"param": "value"}',
+					name: "test_function",
+					id: "call_123",
+				},
+			],
+		};
+
+		const result = processToolCalls(output);
+		expect(result).toHaveLength(1);
+		expect(result[0]).toMatchObject({
+			input: '{"param": "value"}',
+			toolName: "test_function",
+			type: "tool-call",
+		});
+		expect(result[0].toolCallId).not.toBe("call_123");
+		expect(toWorkersAIToolCallId(result[0].toolCallId)).toBe("call_123");
+	});
+
+	it("should return empty array when no tool calls present", () => {
+		expect(processToolCalls({})).toEqual([]);
+		expect(processToolCalls({ tool_calls: null })).toEqual([]);
+		expect(processToolCalls({ tool_calls: [] })).toEqual([]);
+	});
+
+	it("should handle undefined or null arguments", () => {
+		const output = {
+			tool_calls: [
+				{
+					function: {
+						arguments: null,
+						name: "test_function",
+					},
+					id: "call_123",
+				},
+			],
+		};
+
+		const result = processToolCalls(output);
+		expect(result[0].input).toBe("{}");
+	});
+
+	it("should extract tool calls from OpenAI choices format", () => {
+		const output = {
+			choices: [
+				{
+					message: {
+						tool_calls: [
+							{
+								id: "call_abc",
+								type: "function",
+								function: {
+									name: "get_weather",
+									arguments: '{"city": "London"}',
+								},
+							},
+						],
+					},
+				},
+			],
+		};
+
+		const result = processToolCalls(output);
+		expect(result).toHaveLength(1);
+		expect(result[0].toolName).toBe("get_weather");
+		expect(result[0].toolCallId).not.toBe("call_abc");
+		expect(toWorkersAIToolCallId(result[0].toolCallId)).toBe("call_abc");
+		expect(result[0].input).toBe('{"city": "London"}');
+	});
+
+	it("should rewrite duplicate Kimi-style tool call IDs for AI SDK consumers", () => {
+		const output = {
+			tool_calls: [
+				{
+					id: "functions.list_toolbox_tools:0",
+					type: "function",
+					function: { name: "list_toolbox_tools", arguments: "{}" },
+				},
+				{
+					id: "functions.list_toolbox_tools:0",
+					type: "function",
+					function: { name: "list_toolbox_tools", arguments: "{}" },
+				},
+			],
+		};
+
+		const result = processToolCalls(output);
+		expect(result).toHaveLength(2);
+		expect(result[0].toolCallId).not.toBe(result[1].toolCallId);
+		expect(toWorkersAIToolCallId(result[0].toolCallId)).toBe("functions.list_toolbox_tools:0");
+		expect(toWorkersAIToolCallId(result[1].toolCallId)).toBe("functions.list_toolbox_tools:0");
+	});
+
+	it("should round-trip already-unique GLM-style tool call IDs", () => {
+		const originalId = "chatcmpl-tool-8a89c35582d60474";
+		const rewrittenId = createAISDKToolCallId(originalId);
+
+		expect(rewrittenId).not.toBe(originalId);
+		expect(toWorkersAIToolCallId(rewrittenId)).toBe(originalId);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// prepareToolsAndToolChoice
+// ---------------------------------------------------------------------------
+
+describe("prepareToolsAndToolChoice", () => {
+	const sampleTools: Parameters<typeof prepareToolsAndToolChoice>[0] = [
+		{
+			type: "function",
+			name: "get_weather",
+			description: "Get weather info",
+			inputSchema: {
+				type: "object",
+				properties: { city: { type: "string" } },
+			},
+		},
+		{
+			type: "function",
+			name: "calculator",
+			description: "Calculate math",
+			inputSchema: {
+				type: "object",
+				properties: { expression: { type: "string" } },
+			},
+		},
+	];
+
+	it("should return undefined tools and tool_choice when tools is null", () => {
+		const result = prepareToolsAndToolChoice(undefined, undefined);
+		expect(result.tools).toBeUndefined();
+		expect(result.tool_choice).toBeUndefined();
+	});
+
+	it("should map tools to function format", () => {
+		const result = prepareToolsAndToolChoice(sampleTools, undefined);
+		expect(result.tools).toHaveLength(2);
+		expect(result.tools![0]).toEqual({
+			type: "function",
+			function: {
+				name: "get_weather",
+				description: "Get weather info",
+				parameters: {
+					type: "object",
+					properties: { city: { type: "string" } },
+				},
+			},
+		});
+		expect(result.tool_choice).toBeUndefined();
+	});
+
+	it("should handle 'auto' tool choice", () => {
+		const result = prepareToolsAndToolChoice(sampleTools, { type: "auto" });
+		expect(result.tool_choice).toBe("auto");
+		expect(result.tools).toHaveLength(2);
+	});
+
+	it("should handle 'none' tool choice", () => {
+		const result = prepareToolsAndToolChoice(sampleTools, { type: "none" });
+		expect(result.tool_choice).toBe("none");
+		expect(result.tools).toHaveLength(2);
+	});
+
+	it("should handle 'required' tool choice", () => {
+		const result = prepareToolsAndToolChoice(sampleTools, { type: "required" });
+		expect(result.tool_choice).toBe("required");
+		expect(result.tools).toHaveLength(2);
+	});
+
+	it("should handle 'tool' tool choice with the named-function form", () => {
+		const result = prepareToolsAndToolChoice(sampleTools, {
+			type: "tool",
+			toolName: "calculator",
+		});
+		expect(result.tool_choice).toEqual({
+			type: "function",
+			function: { name: "calculator" },
+		});
+		// Full tool list is preserved (not filtered to the single function).
+		expect(result.tools).toHaveLength(2);
+		expect(result.tools!.map((t) => t.function.name)).toEqual(["get_weather", "calculator"]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// salvageToolCallsFromText (gpt-oss harmony quirk)
+// ---------------------------------------------------------------------------
+
+describe("salvageToolCallsFromText", () => {
+	const tools = [
+		{ function: { name: "read_skill_resource" } },
+		{ function: { name: "calculator" } },
+	];
+	const namedChoice = { type: "function", function: { name: "read_skill_resource" } };
+
+	// A gpt-oss response that leaked the forced tool call into text content.
+	function leakedResponse(content: string) {
+		return {
+			choices: [
+				{
+					message: { role: "assistant", content, tool_calls: [] },
+					finish_reason: "stop",
+				},
+			],
+		};
+	}
+
+	it("salvages a flat-args tool call leaked into content", () => {
+		const output = leakedResponse(
+			'{"name":"read_skill_resource","path":"feedback.txt","name_arg":"x"}',
+		);
+		const result = salvageToolCallsFromText(output, { tools, toolChoice: namedChoice });
+		expect(result).not.toBeNull();
+		expect(result).toHaveLength(1);
+		expect(result![0].toolName).toBe("read_skill_resource");
+		expect(JSON.parse(result![0].input)).toEqual({ path: "feedback.txt", name_arg: "x" });
+		expect(result![0].type).toBe("tool-call");
+	});
+
+	it("salvages a wrapped-arguments tool call", () => {
+		const output = leakedResponse('{"name":"calculator","arguments":{"a":1,"b":2}}');
+		const result = salvageToolCallsFromText(output, {
+			tools,
+			toolChoice: { type: "function", function: { name: "calculator" } },
+		});
+		expect(result).toHaveLength(1);
+		expect(result![0].toolName).toBe("calculator");
+		expect(JSON.parse(result![0].input)).toEqual({ a: 1, b: 2 });
+	});
+
+	it("salvages a wrapped-parameters tool call in array form", () => {
+		const output = leakedResponse('[{"name":"calculator","parameters":{"a":3,"b":4}}]');
+		const result = salvageToolCallsFromText(output, { tools, toolChoice: "required" });
+		expect(result).toHaveLength(1);
+		expect(result![0].toolName).toBe("calculator");
+		expect(JSON.parse(result![0].input)).toEqual({ a: 3, b: 4 });
+	});
+
+	it("returns null when the tool choice is not forced", () => {
+		const output = leakedResponse('{"name":"read_skill_resource","path":"x.txt"}');
+		expect(
+			salvageToolCallsFromText(output, { tools, toolChoice: { type: "auto" } }),
+		).toBeNull();
+		expect(salvageToolCallsFromText(output, { tools, toolChoice: undefined })).toBeNull();
+	});
+
+	it("returns null when real structured tool calls are present", () => {
+		const output = {
+			choices: [
+				{
+					message: {
+						content: '{"name":"read_skill_resource","path":"x.txt"}',
+						tool_calls: [
+							{
+								id: "1",
+								type: "function",
+								function: { name: "calculator", arguments: "{}" },
+							},
+						],
+					},
+				},
+			],
+		};
+		expect(salvageToolCallsFromText(output, { tools, toolChoice: namedChoice })).toBeNull();
+	});
+
+	it("returns null when the JSON name is not a known tool", () => {
+		const output = leakedResponse('{"name":"unknown_tool","path":"x.txt"}');
+		expect(salvageToolCallsFromText(output, { tools, toolChoice: namedChoice })).toBeNull();
+	});
+
+	it("returns null when content is plain prose (not JSON)", () => {
+		const output = leakedResponse("You did wonderfully, I'm proud of your progress!");
+		expect(salvageToolCallsFromText(output, { tools, toolChoice: namedChoice })).toBeNull();
+	});
+
+	it("returns null when there are no tools", () => {
+		const output = leakedResponse('{"name":"read_skill_resource","path":"x.txt"}');
+		expect(
+			salvageToolCallsFromText(output, { tools: undefined, toolChoice: "required" }),
+		).toBeNull();
+	});
+
+	it("ignores array entries whose name is unknown, keeping known ones", () => {
+		const output = leakedResponse(
+			'[{"name":"unknown","x":1},{"name":"calculator","arguments":{"a":9}}]',
+		);
+		const result = salvageToolCallsFromText(output, { tools, toolChoice: "required" });
+		expect(result).toHaveLength(1);
+		expect(result![0].toolName).toBe("calculator");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// processText
+// ---------------------------------------------------------------------------
+
+describe("processText", () => {
+	it("should extract text from native format", () => {
+		expect(processText({ response: "Hello world" })).toBe("Hello world");
+	});
+
+	it("should extract text from OpenAI format", () => {
+		expect(
+			processText({
+				choices: [{ message: { content: "Hello from choices" } }],
+			}),
+		).toBe("Hello from choices");
+	});
+
+	it("should stringify object responses (structured output quirk)", () => {
+		expect(processText({ response: { key: "value" } })).toBe('{"key":"value"}');
+	});
+
+	it("should handle numeric responses (quirk #9)", () => {
+		expect(processText({ response: 42 })).toBe("42");
+	});
+
+	it("should return undefined for null response", () => {
+		expect(processText({ response: null })).toBeUndefined();
+	});
+
+	it("should return undefined for response with no recognized fields", () => {
+		expect(processText({ other: "field" })).toBeUndefined();
+	});
+
+	it("should prefer OpenAI format over native format", () => {
+		expect(
+			processText({
+				choices: [{ message: { content: "From choices" } }],
+				response: "From native",
+			}),
+		).toBe("From choices");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// createRun - gateway support
+// ---------------------------------------------------------------------------
+
+describe("createRun", () => {
+	const originalFetch = globalThis.fetch;
+
+	beforeEach(() => {
+		globalThis.fetch = vi.fn();
+	});
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+		vi.restoreAllMocks();
+	});
+
+	it("should use direct API URL when no gateway is provided", async () => {
+		const mockResponse = {
+			ok: true,
+			json: vi.fn().mockResolvedValue({ result: { response: "Hello" } }),
+			headers: new Headers({ "content-type": "application/json" }),
+		};
+		vi.mocked(globalThis.fetch).mockResolvedValue(mockResponse as unknown as Response);
+
+		const run = createRun({ accountId: "test-account", apiKey: "test-key" });
+		await run("@cf/meta/llama-3.1-8b-instruct" as any, { prompt: "Hi" });
+
+		expect(globalThis.fetch).toHaveBeenCalledWith(
+			"https://api.cloudflare.com/client/v4/accounts/test-account/ai/run/@cf/meta/llama-3.1-8b-instruct",
+			expect.objectContaining({
+				method: "POST",
+				headers: {
+					Authorization: "Bearer test-key",
+					"Content-Type": "application/json",
+				},
+			}),
+		);
+	});
+
+	it("should use gateway URL when gateway.id is provided", async () => {
+		const mockResponse = {
+			ok: true,
+			json: vi.fn().mockResolvedValue({ result: { response: "Hello" } }),
+			headers: new Headers({ "content-type": "application/json" }),
+		};
+		vi.mocked(globalThis.fetch).mockResolvedValue(mockResponse as unknown as Response);
+
+		const run = createRun({ accountId: "test-account", apiKey: "test-key" });
+		await run(
+			"@cf/meta/llama-3.1-8b-instruct" as any,
+			{ prompt: "Hi" },
+			{ gateway: { id: "my-gateway" } },
+		);
+
+		expect(globalThis.fetch).toHaveBeenCalledWith(
+			"https://gateway.ai.cloudflare.com/v1/test-account/my-gateway/workers-ai/run/@cf/meta/llama-3.1-8b-instruct",
+			expect.objectContaining({
+				method: "POST",
+				headers: {
+					Authorization: "Bearer test-key",
+					"Content-Type": "application/json",
+				},
+			}),
+		);
+	});
+
+	it("should not double-prefix run/ when model already starts with run/", async () => {
+		const mockResponse = {
+			ok: true,
+			json: vi.fn().mockResolvedValue({ result: { response: "Hello" } }),
+			headers: new Headers({ "content-type": "application/json" }),
+		};
+		vi.mocked(globalThis.fetch).mockResolvedValue(mockResponse as unknown as Response);
+
+		const run = createRun({ accountId: "test-account", apiKey: "test-key" });
+		await run("run/@cf/meta/llama-3.1-8b-instruct" as any, { prompt: "Hi" });
+
+		expect(globalThis.fetch).toHaveBeenCalledWith(
+			"https://api.cloudflare.com/client/v4/accounts/test-account/ai/run/@cf/meta/llama-3.1-8b-instruct",
+			expect.objectContaining({ method: "POST" }),
+		);
+	});
+
+	it("should not double-prefix run/ in gateway URL when model already starts with run/", async () => {
+		const mockResponse = {
+			ok: true,
+			json: vi.fn().mockResolvedValue({ result: { response: "Hello" } }),
+			headers: new Headers({ "content-type": "application/json" }),
+		};
+		vi.mocked(globalThis.fetch).mockResolvedValue(mockResponse as unknown as Response);
+
+		const run = createRun({ accountId: "test-account", apiKey: "test-key" });
+		await run(
+			"run/@cf/meta/llama-3.1-8b-instruct" as any,
+			{ prompt: "Hi" },
+			{ gateway: { id: "my-gateway" } },
+		);
+
+		expect(globalThis.fetch).toHaveBeenCalledWith(
+			"https://gateway.ai.cloudflare.com/v1/test-account/my-gateway/workers-ai/run/@cf/meta/llama-3.1-8b-instruct",
+			expect.objectContaining({ method: "POST" }),
+		);
+	});
+
+	it("should add cf-aig-skip-cache header when skipCache is true", async () => {
+		const mockResponse = {
+			ok: true,
+			json: vi.fn().mockResolvedValue({ result: { response: "Hello" } }),
+			headers: new Headers({ "content-type": "application/json" }),
+		};
+		vi.mocked(globalThis.fetch).mockResolvedValue(mockResponse as unknown as Response);
+
+		const run = createRun({ accountId: "test-account", apiKey: "test-key" });
+		await run(
+			"@cf/meta/llama-3.1-8b-instruct" as any,
+			{ prompt: "Hi" },
+			{ gateway: { id: "my-gateway", skipCache: true } },
+		);
+
+		expect(globalThis.fetch).toHaveBeenCalledWith(
+			expect.any(String),
+			expect.objectContaining({
+				headers: expect.objectContaining({
+					"cf-aig-skip-cache": "true",
+				}),
+			}),
+		);
+	});
+
+	it("should add cf-aig-cache-ttl header when cacheTtl is provided", async () => {
+		const mockResponse = {
+			ok: true,
+			json: vi.fn().mockResolvedValue({ result: { response: "Hello" } }),
+			headers: new Headers({ "content-type": "application/json" }),
+		};
+		vi.mocked(globalThis.fetch).mockResolvedValue(mockResponse as unknown as Response);
+
+		const run = createRun({ accountId: "test-account", apiKey: "test-key" });
+		await run(
+			"@cf/meta/llama-3.1-8b-instruct" as any,
+			{ prompt: "Hi" },
+			{ gateway: { id: "my-gateway", cacheTtl: 3600 } },
+		);
+
+		expect(globalThis.fetch).toHaveBeenCalledWith(
+			expect.any(String),
+			expect.objectContaining({
+				headers: expect.objectContaining({
+					"cf-aig-cache-ttl": "3600",
+				}),
+			}),
+		);
+	});
+
+	it("should add cf-aig-cache-key header when cacheKey is provided", async () => {
+		const mockResponse = {
+			ok: true,
+			json: vi.fn().mockResolvedValue({ result: { response: "Hello" } }),
+			headers: new Headers({ "content-type": "application/json" }),
+		};
+		vi.mocked(globalThis.fetch).mockResolvedValue(mockResponse as unknown as Response);
+
+		const run = createRun({ accountId: "test-account", apiKey: "test-key" });
+		await run(
+			"@cf/meta/llama-3.1-8b-instruct" as any,
+			{ prompt: "Hi" },
+			{ gateway: { id: "my-gateway", cacheKey: "my-custom-key" } },
+		);
+
+		expect(globalThis.fetch).toHaveBeenCalledWith(
+			expect.any(String),
+			expect.objectContaining({
+				headers: expect.objectContaining({
+					"cf-aig-cache-key": "my-custom-key",
+				}),
+			}),
+		);
+	});
+
+	it("should add cf-aig-metadata header when metadata is provided", async () => {
+		const mockResponse = {
+			ok: true,
+			json: vi.fn().mockResolvedValue({ result: { response: "Hello" } }),
+			headers: new Headers({ "content-type": "application/json" }),
+		};
+		vi.mocked(globalThis.fetch).mockResolvedValue(mockResponse as unknown as Response);
+
+		const run = createRun({ accountId: "test-account", apiKey: "test-key" });
+		await run(
+			"@cf/meta/llama-3.1-8b-instruct" as any,
+			{ prompt: "Hi" },
+			{ gateway: { id: "my-gateway", metadata: { user: "test", session: 123 } } },
+		);
+
+		expect(globalThis.fetch).toHaveBeenCalledWith(
+			expect.any(String),
+			expect.objectContaining({
+				headers: expect.objectContaining({
+					"cf-aig-metadata": '{"user":"test","session":123}',
+				}),
+			}),
+		);
+	});
+
+	it("should add all gateway cache headers when all options are provided", async () => {
+		const mockResponse = {
+			ok: true,
+			json: vi.fn().mockResolvedValue({ result: { response: "Hello" } }),
+			headers: new Headers({ "content-type": "application/json" }),
+		};
+		vi.mocked(globalThis.fetch).mockResolvedValue(mockResponse as unknown as Response);
+
+		const run = createRun({ accountId: "test-account", apiKey: "test-key" });
+		await run(
+			"@cf/meta/llama-3.1-8b-instruct" as any,
+			{ prompt: "Hi" },
+			{
+				gateway: {
+					id: "my-gateway",
+					skipCache: true,
+					cacheTtl: 7200,
+					cacheKey: "custom-key",
+					metadata: { env: "prod" },
+				},
+			},
+		);
+
+		expect(globalThis.fetch).toHaveBeenCalledWith(
+			"https://gateway.ai.cloudflare.com/v1/test-account/my-gateway/workers-ai/run/@cf/meta/llama-3.1-8b-instruct",
+			expect.objectContaining({
+				headers: {
+					Authorization: "Bearer test-key",
+					"Content-Type": "application/json",
+					"cf-aig-skip-cache": "true",
+					"cf-aig-cache-ttl": "7200",
+					"cf-aig-cache-key": "custom-key",
+					"cf-aig-metadata": '{"env":"prod"}',
+				},
+			}),
+		);
+	});
+
+	it("should use custom fetch when provided", async () => {
+		const customFetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: vi.fn().mockResolvedValue({ result: { response: "Hello" } }),
+			headers: new Headers({ "content-type": "application/json" }),
+		});
+
+		const run = createRun({
+			accountId: "test-account",
+			apiKey: "test-key",
+			fetch: customFetch as typeof globalThis.fetch,
+		});
+		await run("@cf/meta/llama-3.1-8b-instruct" as any, { prompt: "Hi" });
+
+		expect(customFetch).toHaveBeenCalledWith(
+			"https://api.cloudflare.com/client/v4/accounts/test-account/ai/run/@cf/meta/llama-3.1-8b-instruct",
+			expect.objectContaining({ method: "POST" }),
+		);
+		expect(globalThis.fetch).not.toHaveBeenCalled();
+	});
+
+	it("should use custom fetch for streaming retry fallback", async () => {
+		const customFetch = vi
+			.fn()
+			// First call: streaming request returns JSON instead of SSE (triggers retry)
+			.mockResolvedValueOnce({
+				ok: true,
+				headers: new Headers({ "content-type": "application/json" }),
+				body: null,
+				json: vi.fn().mockResolvedValue({ result: { response: "" } }),
+			})
+			// Second call: non-streaming retry
+			.mockResolvedValueOnce({
+				ok: true,
+				headers: new Headers({ "content-type": "application/json" }),
+				json: vi.fn().mockResolvedValue({ result: { response: "Hello" } }),
+			});
+
+		const run = createRun({
+			accountId: "test-account",
+			apiKey: "test-key",
+			fetch: customFetch as typeof globalThis.fetch,
+		});
+		await run("@cf/meta/llama-3.1-8b-instruct" as any, { prompt: "Hi", stream: true } as any);
+
+		expect(customFetch).toHaveBeenCalledTimes(2);
+		expect(globalThis.fetch).not.toHaveBeenCalled();
+	});
+});

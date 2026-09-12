@@ -1,0 +1,70 @@
+name: CI
+
+on:
+    push:
+        branches:
+            - main
+    pull_request:
+
+permissions:
+    actions: write
+    contents: read
+    pull-requests: write
+
+jobs:
+    main:
+        runs-on: ubuntu-latest
+        env:
+            CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+            CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - uses: pnpm/action-setup@v4
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: "pnpm"
+
+            # Restore the cached .nx folder (if it exists)
+            - name: Restore Nx cache
+              id: nx-cache
+              uses: actions/cache@v3
+              with:
+                  path: .nx
+                  key: nx-cache-${{ runner.os }}-${{ hashFiles('**/nx.json') }}
+                  restore-keys: |
+                      nx-cache-${{ runner.os }}-
+
+            - name: Install dependencies
+              run: pnpm install --frozen-lockfile --child-concurrency=10
+
+            - name: Install uv for Python
+              uses: astral-sh/setup-uv@v6
+              with:
+                  version: "0.9.3"
+                  enable-cache: false
+
+            - name: Format and lint everything
+              run: |
+                  pnpm format
+                  pnpm lint
+
+            - name: Set Nx SHAs
+              uses: nrwl/nx-set-shas@v4
+
+            - name: Run Nx tasks
+              id: checks
+              run: pnpm nx affected -t lint test:ci type-check build
+
+            - name: Cache Nx folder
+              uses: actions/cache@v3
+              with:
+                  path: .nx
+                  key: nx-cache-${{ runner.os }}-${{ hashFiles('**/nx.json') }}
+                  restore-keys: |
+                      nx-cache-${{ runner.os }}-

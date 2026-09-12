@@ -1,0 +1,35 @@
+{
+	"name": "vision",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build": "vite build",
+		"cf-typegen": "wrangler types",
+		"deploy": "npm run build && wrangler deploy",
+		"dev": "vite",
+		"format": "oxfmt --write .",
+		"lint": "oxlint",
+		"preview": "npm run build && vite preview",
+		"start": "npm run dev",
+		"type-check": "tsc --noEmit"
+	},
+	"dependencies": {
+		"ai": "^7.0.11",
+		"hono": "^4.12.27",
+		"react": "^19.2.7",
+		"react-dom": "^19.2.7",
+		"workers-ai-provider": "^3.2.1",
+		"zod": "^4.4.3"
+	},
+	"devDependencies": {
+		"@cloudflare/vite-plugin": "^1.42.3",
+		"@types/react": "^19.2.17",
+		"@types/react-dom": "^19.2.3",
+		"@vitejs/plugin-react": "^6.0.3",
+		"oxfmt": "^0.56.0",
+		"oxlint": "^1.71.0",
+		"typescript": "6.0.3",
+		"vite": "^8.1.0",
+		"wrangler": "^4.105.0"
+	}
+}

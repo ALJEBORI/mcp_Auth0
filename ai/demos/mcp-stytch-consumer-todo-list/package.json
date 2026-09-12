@@ -1,0 +1,36 @@
+{
+	"name": "mcp-stytch-consumer-todo-list",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "vite",
+		"build": "vite build",
+		"lint": "oxlint",
+		"type-check": "tsc --noEmit",
+		"preview": "npm run build && vite preview",
+		"deploy": "npm run build && wrangler deploy",
+		"cf-typegen": "wrangler types"
+	},
+	"dependencies": {
+		"@stytch/react": "^20.0.11",
+		"@stytch/vanilla-js": "^6.0.11",
+		"agents": "^0.17.1",
+		"hono": "^4.12.27",
+		"jose": "^6.2.3",
+		"react": "^19.2.7",
+		"react-dom": "^19.2.7",
+		"react-router-dom": "^7.18.0",
+		"zod": "^4.4.3"
+	},
+	"devDependencies": {
+		"@cloudflare/vite-plugin": "^1.42.3",
+		"@types/react": "^19.2.17",
+		"@types/react-dom": "^19.2.3",
+		"@vitejs/plugin-react": "^6.0.3",
+		"oxlint": "^1.71.0",
+		"typescript": "6.0.3",
+		"vite": "^8.1.0",
+		"wrangler": "^4.105.0"
+	}
+}

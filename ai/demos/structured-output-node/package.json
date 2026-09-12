@@ -1,0 +1,24 @@
+{
+	"name": "structured-output-node",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "npx tsx ./src/index.ts",
+		"format": "oxfmt --write .",
+		"lint": "oxlint",
+		"lint:fix": "oxlint --fix",
+		"type-check": "tsc --noEmit"
+	},
+	"dependencies": {
+		"ai": "^7.0.11",
+		"workers-ai-provider": "^3.2.1",
+		"zod": "^4.4.3"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^4.20260628.1",
+		"oxfmt": "^0.56.0",
+		"oxlint": "^1.71.0",
+		"typescript": "6.0.3",
+		"vitest": "~4.1.9"
+	}
+}

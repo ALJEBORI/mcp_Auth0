@@ -1,0 +1,225 @@
+{
+	"name": "ai-gateway-provider",
+	"version": "4.0.1",
+	"description": "AI Gateway Provider for AI-SDK",
+	"keywords": [
+		"agents",
+		"ai",
+		"autorag",
+		"cloudflare",
+		"rag",
+		"workers"
+	],
+	"homepage": "https://developers.cloudflare.com/ai-gateway/integrations/vercel-ai-sdk/",
+	"bugs": {
+		"url": "https://github.com/cloudflare/ai/issues"
+	},
+	"license": "MIT",
+	"author": "Cloudflare Inc.",
+	"repository": {
+		"type": "git",
+		"url": "git+ssh://git@github.com/cloudflare/ai.git"
+	},
+	"files": [
+		"dist",
+		"LICENSE",
+		"README.md"
+	],
+	"main": "./dist/index.mjs",
+	"types": "./dist/index.d.mts",
+	"exports": {
+		".": {
+			"types": {
+				"import": "./dist/index.d.mts",
+				"require": "./dist/index.d.cts"
+			},
+			"import": "./dist/index.mjs",
+			"require": "./dist/index.cjs"
+		},
+		"./providers/amazon-bedrock": {
+			"types": {
+				"import": "./dist/providers/amazon-bedrock.d.mts",
+				"require": "./dist/providers/amazon-bedrock.d.cts"
+			},
+			"import": "./dist/providers/amazon-bedrock.mjs",
+			"require": "./dist/providers/amazon-bedrock.cjs"
+		},
+		"./providers/openai": {
+			"types": {
+				"import": "./dist/providers/openai.d.mts",
+				"require": "./dist/providers/openai.d.cts"
+			},
+			"import": "./dist/providers/openai.mjs",
+			"require": "./dist/providers/openai.cjs"
+		},
+		"./providers/xai": {
+			"types": {
+				"import": "./dist/providers/xai.d.mts",
+				"require": "./dist/providers/xai.d.cts"
+			},
+			"import": "./dist/providers/xai.mjs",
+			"require": "./dist/providers/xai.cjs"
+		},
+		"./providers/google": {
+			"types": {
+				"import": "./dist/providers/google.d.mts",
+				"require": "./dist/providers/google.d.cts"
+			},
+			"import": "./dist/providers/google.mjs",
+			"require": "./dist/providers/google.cjs"
+		},
+		"./providers/groq": {
+			"types": {
+				"import": "./dist/providers/groq.d.mts",
+				"require": "./dist/providers/groq.d.cts"
+			},
+			"import": "./dist/providers/groq.mjs",
+			"require": "./dist/providers/groq.cjs"
+		},
+		"./providers/mistral": {
+			"types": {
+				"import": "./dist/providers/mistral.d.mts",
+				"require": "./dist/providers/mistral.d.cts"
+			},
+			"import": "./dist/providers/mistral.mjs",
+			"require": "./dist/providers/mistral.cjs"
+		},
+		"./providers/perplexity": {
+			"types": {
+				"import": "./dist/providers/perplexity.d.mts",
+				"require": "./dist/providers/perplexity.d.cts"
+			},
+			"import": "./dist/providers/perplexity.mjs",
+			"require": "./dist/providers/perplexity.cjs"
+		},
+		"./providers/anthropic": {
+			"types": {
+				"import": "./dist/providers/anthropic.d.mts",
+				"require": "./dist/providers/anthropic.d.cts"
+			},
+			"import": "./dist/providers/anthropic.mjs",
+			"require": "./dist/providers/anthropic.cjs"
+		},
+		"./providers/azure": {
+			"types": {
+				"import": "./dist/providers/azure.d.mts",
+				"require": "./dist/providers/azure.d.cts"
+			},
+			"import": "./dist/providers/azure.mjs",
+			"require": "./dist/providers/azure.cjs"
+		},
+		"./providers/cerebras": {
+			"types": {
+				"import": "./dist/providers/cerebras.d.mts",
+				"require": "./dist/providers/cerebras.d.cts"
+			},
+			"import": "./dist/providers/cerebras.mjs",
+			"require": "./dist/providers/cerebras.cjs"
+		},
+		"./providers/cohere": {
+			"types": {
+				"import": "./dist/providers/cohere.d.mts",
+				"require": "./dist/providers/cohere.d.cts"
+			},
+			"import": "./dist/providers/cohere.mjs",
+			"require": "./dist/providers/cohere.cjs"
+		},
+		"./providers/deepgram": {
+			"types": {
+				"import": "./dist/providers/deepgram.d.mts",
+				"require": "./dist/providers/deepgram.d.cts"
+			},
+			"import": "./dist/providers/deepgram.mjs",
+			"require": "./dist/providers/deepgram.cjs"
+		},
+		"./providers/deepseek": {
+			"types": {
+				"import": "./dist/providers/deepseek.d.mts",
+				"require": "./dist/providers/deepseek.d.cts"
+			},
+			"import": "./dist/providers/deepseek.mjs",
+			"require": "./dist/providers/deepseek.cjs"
+		},
+		"./providers/elevenlabs": {
+			"types": {
+				"import": "./dist/providers/elevenlabs.d.mts",
+				"require": "./dist/providers/elevenlabs.d.cts"
+			},
+			"import": "./dist/providers/elevenlabs.mjs",
+			"require": "./dist/providers/elevenlabs.cjs"
+		},
+		"./providers/fireworks": {
+			"types": {
+				"import": "./dist/providers/fireworks.d.mts",
+				"require": "./dist/providers/fireworks.d.cts"
+			},
+			"import": "./dist/providers/fireworks.mjs",
+			"require": "./dist/providers/fireworks.cjs"
+		},
+		"./providers/google-vertex": {
+			"types": {
+				"import": "./dist/providers/google-vertex.d.mts",
+				"require": "./dist/providers/google-vertex.d.cts"
+			},
+			"import": "./dist/providers/google-vertex.mjs",
+			"require": "./dist/providers/google-vertex.cjs"
+		},
+		"./providers/openrouter": {
+			"types": {
+				"import": "./dist/providers/openrouter.d.mts",
+				"require": "./dist/providers/openrouter.d.cts"
+			},
+			"import": "./dist/providers/openrouter.mjs",
+			"require": "./dist/providers/openrouter.cjs"
+		},
+		"./providers/unified": {
+			"types": {
+				"import": "./dist/providers/unified.d.mts",
+				"require": "./dist/providers/unified.d.cts"
+			},
+			"import": "./dist/providers/unified.mjs",
+			"require": "./dist/providers/unified.cjs"
+		}
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"scripts": {
+		"build": "rm -rf dist && tsdown --config tsdown.config.ts",
+		"format": "oxfmt --write .",
+		"test:ci": "vitest --watch=false",
+		"test": "vitest",
+		"test:e2e": "vitest --config vitest.e2e.config.ts --watch=false",
+		"type-check": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@cloudflare/gateway-core": "workspace:*",
+		"tsdown": "^0.22.3",
+		"typescript": "6.0.3"
+	},
+	"peerDependencies": {
+		"@ai-sdk/openai-compatible": "^3.0.32",
+		"@ai-sdk/provider": "^4.0.1",
+		"@ai-sdk/provider-utils": "^5.0.3",
+		"ai": "^7.0.11"
+	},
+	"optionalDependencies": {
+		"@ai-sdk/amazon-bedrock": "^5.0.8",
+		"@ai-sdk/anthropic": "^4.0.5",
+		"@ai-sdk/azure": "^4.0.5",
+		"@ai-sdk/cerebras": "^3.0.3",
+		"@ai-sdk/cohere": "^4.0.3",
+		"@ai-sdk/deepgram": "^3.0.3",
+		"@ai-sdk/deepseek": "^3.0.3",
+		"@ai-sdk/elevenlabs": "^3.0.4",
+		"@ai-sdk/fireworks": "^3.0.4",
+		"@ai-sdk/google": "^4.0.6",
+		"@ai-sdk/google-vertex": "^5.0.8",
+		"@ai-sdk/groq": "^4.0.3",
+		"@ai-sdk/mistral": "^4.0.3",
+		"@ai-sdk/openai": "^4.0.5",
+		"@ai-sdk/perplexity": "^4.0.4",
+		"@ai-sdk/xai": "^4.0.4",
+		"@openrouter/ai-sdk-provider": "^2.10.0"
+	}
+}

@@ -1,0 +1,35 @@
+{
+	"name": "parallelisation",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "vite",
+		"build": "vite build",
+		"preview": "npm run build && vite preview",
+		"deploy": "npm run build && wrangler deploy",
+		"format": "oxfmt --write .",
+		"test": "vitest",
+		"test:ci": "vitest --watch=false",
+		"cf-typegen": "wrangler types",
+		"lint": "oxlint",
+		"lint:fix": "oxlint --fix",
+		"type-check": "tsc --noEmit"
+	},
+	"dependencies": {
+		"agents": "^0.17.1",
+		"ai": "^7.0.11",
+		"hono": "^4.12.27",
+		"workers-ai-provider": "^3.2.1",
+		"zod": "^4.4.3"
+	},
+	"devDependencies": {
+		"@cloudflare/vite-plugin": "^1.42.3",
+		"@cloudflare/vitest-pool-workers": "^0.16.20",
+		"oxfmt": "^0.56.0",
+		"oxlint": "^1.71.0",
+		"typescript": "6.0.3",
+		"vite": "^8.1.0",
+		"vitest": "~4.1.9",
+		"wrangler": "^4.105.0"
+	}
+}

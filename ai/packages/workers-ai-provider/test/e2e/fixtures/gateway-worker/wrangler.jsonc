@@ -1,0 +1,15 @@
+{
+	"name": "workers-ai-provider-gateway-test",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-09-27",
+	"compatibility_flags": ["nodejs_compat"],
+	"ai": {
+		"binding": "AI"
+	},
+	"vars": {
+		// The gateway must already exist in the account running the e2e suite.
+		// "default" is the auto-provisioned gateway present on every account;
+		// override with `GATEWAY_ID` via .dev.vars to target a different one.
+		"GATEWAY_ID": "default"
+	}
+}

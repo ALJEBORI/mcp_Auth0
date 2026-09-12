@@ -1,0 +1,39 @@
+{
+	"name": "model-scraper",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "CLOUDFLARE_ENV=development vite",
+		"start": "npm run dev",
+		"build": "vite build",
+		"preview": "npm run build && vite preview",
+		"deploy": "npm run build && npm run deploy:production",
+		"deploy:production": "wrangler deploy -e production",
+		"deploy:staging": "wrangler deploy -e staging",
+		"format": "oxfmt --write .",
+		"test": "vitest",
+		"cf-typegen": "wrangler types",
+		"lint": "oxlint",
+		"lint:fix": "oxlint --fix",
+		"test:ci": "vitest --watch=false",
+		"type-check": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@ai-sdk/openai": "^4.0.5",
+		"agents": "^0.17.1",
+		"ai": "^7.0.11",
+		"hono": "^4.12.27",
+		"workers-ai-provider": "^3.2.1",
+		"zod": "^4.4.3"
+	},
+	"devDependencies": {
+		"@cloudflare/vite-plugin": "^1.42.3",
+		"@cloudflare/vitest-pool-workers": "^0.16.20",
+		"oxfmt": "^0.56.0",
+		"oxlint": "^1.71.0",
+		"typescript": "6.0.3",
+		"vite": "^8.1.0",
+		"vitest": "~4.1.9",
+		"wrangler": "^4.105.0"
+	}
+}

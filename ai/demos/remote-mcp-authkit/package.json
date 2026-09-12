@@ -1,0 +1,31 @@
+{
+	"name": "remote-mcp-authkit",
+	"version": "0.0.1",
+	"private": true,
+	"scripts": {
+		"build": "tsc -p .",
+		"cf-typegen": "wrangler types --env example",
+		"deploy": "wrangler deploy",
+		"dev": "wrangler dev",
+		"format": "oxfmt --write .",
+		"lint": "oxlint",
+		"lint:fix": "oxlint --fix",
+		"start": "wrangler dev",
+		"type-check": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@cloudflare/workers-oauth-provider": "^0.8.1",
+		"@workos-inc/node": "^10.7.0",
+		"agents": "^0.17.1",
+		"hono": "^4.12.27",
+		"jose": "^6.2.3",
+		"zod": "^4.4.3"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^4.20260628.1",
+		"oxfmt": "^0.56.0",
+		"oxlint": "^1.71.0",
+		"typescript": "6.0.3",
+		"wrangler": "^4.105.0"
+	}
+}
