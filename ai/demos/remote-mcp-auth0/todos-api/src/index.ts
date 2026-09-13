@@ -4,10 +4,11 @@ import type { JWTHeaderParameters, JWTPayload } from "jose";
 import { jwt, requireScope } from "./middlewares/jwt";
 
 const app = new Hono<{
-	Variables: {
-		jwtPayload: JWTPayload;
-		jwtProtectedHeader: JWTHeaderParameters;
-	};
+   // Bindings: Auth0JwtEnv;
+    Variables: {
+        jwtPayload: JWTPayload;
+        jwtProtectedHeader: JWTHeaderParameters;
+    };
 }>();
 
 /**

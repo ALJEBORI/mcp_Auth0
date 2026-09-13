@@ -20,7 +20,9 @@ export const jwt = (
 	let JWKS: ReturnType<typeof createRemoteJWKSet> | null = null;
 
 	return async function jwt(ctx, next) {
-		const auth0Env = env<Auth0JwtEnv>(ctx);
+		// const auth0Env = env<Auth0JwtEnv>(ctx);
+		const auth0Env = (ctx.env || {}) as Auth0JwtEnv; // my modif
+		console.log("--------------DEBUG auth0Env:", auth0Env);
 
 		const { auth0_domain: raw_auth0_domain, auth0_audience } = options || {
 			auth0_audience: auth0Env.AUTH0_AUDIENCE,
