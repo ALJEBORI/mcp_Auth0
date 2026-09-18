@@ -6,77 +6,120 @@ import { authorize, callback, confirmConsent, tokenExchangeCallback } from "./au
 import type { UserProps } from "./types";
 
 export class AuthenticatedMCP extends McpAgent<Env, Record<string, never>, UserProps> {
-	server = new McpServer({
-		name: "Auth0 OIDC Proxy Demo",
-		version: "1.0.0",
-	});
+    server = new McpServer({
+        name: "Auth0 OIDC Proxy Demo",
+        version: "1.0.0",
+    });
 
-	async init() {
-		// Useful for debugging. This will show the current user's claims and the Auth0 tokens.
-		this.server.tool("whoami", "Get the current user's details", {}, async () => ({
-			content: [{ text: JSON.stringify(this.props!.claims, null, 2), type: "text" }],
-		}));
+    async init() {
+        // Useful for debugging. This will show the current user's claims and the Auth0 tokens.
+        this.server.tool("whoami", "Get the current user's details", {}, async () => ({
+            content: [{ text: JSON.stringify(this.props!.claims, null, 2), type: "text" }],
+        }));
 
-		// Call the Todos API on behalf of the current user.
-		this.server.tool("list-todos", "List the current user's todos", {}, async () => {
-			try {
-				const response = await fetch(`${this.env.API_BASE_URL}/api/todos`, {
-					headers: {
-						// The Auth0 Access Token is available in props.tokenSet and can be used to call the Upstream API (Todos API).
-						Authorization: `Bearer ${this.props!.tokenSet.accessToken}`,
-					},
-				});
+        // Call the Todos API on behalf of the current user.
+        this.server.tool("list-todos", "List the current user's todos", {}, async () => {
+            try {
+                const response = await fetch(`${this.env.API_BASE_URL}/api/todos`, {
+                    headers: {
+                        Authorization: `Bearer ${this.props!.tokenSet.accessToken}`,
+                    },
+                });
 
-				const data = await response.json();
-				return {
-					content: [
-						{
-							text: JSON.stringify(data),
-							type: "text",
-						},
-					],
-				};
-			} catch (e) {
-				return {
-					content: [{ text: `The call to the Todos API failed: ${e}`, type: "text" }],
-				};
-			}
-		});
+                const data = await response.json();
+                return {
+                    content: [
+                        {
+                            text: JSON.stringify(data),
+                            type: "text",
+                        },
+                    ],
+                };
+            } catch (e) {
+                return {
+                    content: [{ text: `The call to the Todos API failed: ${e}`, type: "text" }],
+                };
+            }
+        });
 
-		// Get the current user's billing settings.
-		// Note that read:billing is not being requested by the MCP server, meaning that this request will fail.
-		// This is to show it's possible to implement scenarios where the MCP server can only call the APIs which the user has consented to.
-		this.server.tool(
-			"list-billing",
-			"List the current user's billing settings",
-			{},
-			async () => {
-				const response = await fetch(`${this.env.API_BASE_URL}/api/billing`, {
-					headers: {
-						Authorization: `Bearer ${this.props!.tokenSet.accessToken}`,
-					},
-				});
+        // Get the current user's billing settings.
+        this.server.tool(
+            "list-billing",
+            "List the current user's billing settings",
+            {},
+            async () => {
+                const response = await fetch(`${this.env.API_BASE_URL}/api/billing`, {
+                    headers: {
+                        Authorization: `Bearer ${this.props!.tokenSet.accessToken}`,
+                    },
+                });
 
-				return {
-					content: [{ text: await response.text(), type: "text" }],
-				};
-			},
-		);
-	}
+                return {
+                    content: [{ text: await response.text(), type: "text" }],
+                };
+            },
+        );
+    }
 }
 
 // Initialize the Hono app with the routes for the OAuth Provider.
 const app = new Hono<{ Bindings: Env & { OAUTH_PROVIDER: OAuthHelpers } }>();
-app.get("/authorize", authorize);
-app.post("/authorize", confirmConsent);
-app.get("/callback", callback);
 
-export default new OAuthProvider({
-	apiHandler: AuthenticatedMCP.serve("/mcp"),
-	apiRoute: "/mcp",
-	authorizeEndpoint: "/authorize",
-	clientRegistrationEndpoint: "/register",
-	defaultHandler: app,
-	tokenEndpoint: "/token",
-	tokenExchangeCallback,
+// Global middleware to log all incoming requests hitting Hono routes
+app.use("*", async (c, next) => {
+    console.log(`[Hono:Router] Incoming ${c.req.method} request to: ${c.req.url}`);
+    console.log(`[Hono:Router] Headers -> Authorization:`, c.req.header("Authorization") ? "Present" : "Missing");
+    console.log(`[Hono:Router] Headers -> Cookie:`, c.req.header("Cookie") ? "Present" : "Missing");
+    await next();
+    console.log(`[Hono:Router] Response status for ${c.req.path}:`, c.res.status);
 });
+
+app.get("/authorize", async (c) => {
+    console.log("[Hono] Route hit: GET /authorize");
+    try {
+        return await authorize(c);
+    } catch (err: any) {
+        console.error("[Hono] CRITICAL ERROR in GET /authorize:", err);
+        return c.text(`Internal Server Error: ${err.message || err}`, 500);
+    }
+});
+
+app.post("/authorize", async (c) => {
+    console.log("[Hono] Route hit: POST /authorize (Confirm Consent)");
+    return confirmConsent(c);
+});
+
+app.get("/callback", async (c) => {
+    console.log("[Hono] Route hit: GET /callback");
+    return callback(c);
+});
+// Add this middleware right above your export default new OAuthProvider(...)
+app.use("/authorize", async (c, next) => {
+    const url = new URL(c.req.url);
+    console.log("----------------------------------------");
+    console.log("[Debug:Authorize] Client ID requested:", url.searchParams.get("client_id"));
+    console.log("[Debug:Authorize] Full query params:", url.search);
+    console.log("----------------------------------------");
+    await next();
+});
+export default {
+    async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+        // Optional safety check
+        if (!env.COOKIE_SECRET) {
+            return new Response("Configuration Error: COOKIE_SECRET is missing", { status: 500 });
+        }
+
+        const provider = new OAuthProvider({
+            apiHandler: AuthenticatedMCP.serve("/mcp"),
+            apiRoute: "/mcp",
+            authorizeEndpoint: "/authorize",
+            clientRegistrationEndpoint: "/register",
+            defaultHandler: app,
+            tokenEndpoint: "/token",
+            tokenExchangeCallback,
+            cookieSecret: env.COOKIE_SECRET, // <-- Pass the secret directly to the OAuthProvider here
+        });
+
+        return provider.fetch(request, env, ctx);
+    }
+};
