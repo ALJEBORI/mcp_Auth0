@@ -105,10 +105,6 @@ app.use("/authorize", async (c, next) => {
 export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContext) {
         // Optional safety check
-        if (!env.COOKIE_SECRET) {
-            return new Response("Configuration Error: COOKIE_SECRET is missing", { status: 500 });
-        }
-
         const provider = new OAuthProvider({
             apiHandler: AuthenticatedMCP.serve("/mcp"),
             apiRoute: "/mcp",
@@ -116,8 +112,7 @@ export default {
             clientRegistrationEndpoint: "/register",
             defaultHandler: app,
             tokenEndpoint: "/token",
-            tokenExchangeCallback,
-            cookieSecret: env.COOKIE_SECRET, // <-- Pass the secret directly to the OAuthProvider here
+            tokenExchangeCallback
         });
 
         return provider.fetch(request, env, ctx);

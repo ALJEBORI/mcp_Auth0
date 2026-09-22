@@ -113,6 +113,7 @@ export const jwt = (
 			protectedHeader = verified.protectedHeader;
 		} catch (e) {
 			cause = e as Error;
+			console.error("🔥 JWT Verification Detailed Error:", e); // <--- Add this line
 		}
 
 		if (!payload) {
