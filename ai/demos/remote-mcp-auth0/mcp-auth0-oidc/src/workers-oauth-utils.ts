@@ -462,7 +462,8 @@ export function renderApprovalDialog(request: Request, options: ApprovalDialogOp
 	const encodedState = btoa(JSON.stringify(state));
 
 	const serverName = sanitizeText(server.name);
-	const clientName = client?.clientName ? sanitizeText(client.clientName) : "Unknown MCP Client";
+	//const clientName = client?.clientName ? sanitizeText(client.clientName) : "Unknown MCP Client";
+	const clientName = client?.clientName ? sanitizeText(client.clientName) : "Todo MCP Server";
 	const serverDescription = server.description ? sanitizeText(server.description) : "";
 
 	// Validate URLs then HTML-escape for safe use in attributes

@@ -45,10 +45,10 @@ app.get("/api/todos", requireScope("read:todos"), async (c) => {
 		todos: faker.helpers.multiple(
 			() => ({
 				date: faker.date.future(),
-				description: faker.lorem.paragraph(),
-				id: faker.string.uuid(),
-				owner: user.sub,
-				title: faker.lorem.sentence(),
+                description: faker.hacker.phrase(),
+                id: faker.string.uuid(),
+                owner: user.sub,
+                title: faker.word.words({ count: { min: 3, max: 6 } }),
 			}),
 			{
 				count: 5,
